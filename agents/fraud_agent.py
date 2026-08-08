@@ -1,6 +1,7 @@
 """agents/fraud_agent.py"""
 import pandas as pd
 
+
 class FraudAgent:
     """Combines Isolation Forest ML with deterministic risk heuristic rules."""
 
@@ -25,7 +26,10 @@ class FraudAgent:
         if row.get("digital_footprint_consistency", 1.0) < 0.4:
             flags.append("INCONSISTENT_IDENTITY_FOOTPRINT")
 
-        is_anomalous = (pred == -1) or (len(flags) >= 2)
+        # IMPORTANT: cast every numpy scalar to a native Python type before
+        # it goes anywhere near the FastAPI response — numpy.bool_/numpy.int64
+        # are not JSON-serializable and jsonable_encoder will 500 on them.
+        is_anomalous = bool((pred == -1) or (len(flags) >= 2))
 
         return {
             "is_anomalous": is_anomalous,

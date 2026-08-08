@@ -1,7 +1,10 @@
 """
 app.py - Multi-Agent Event-Driven FastAPI Backend
 """
-import os, joblib, pandas as pd, uvicorn
+import os
+import joblib
+import pandas as pd
+import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,13 +13,17 @@ from typing import Dict, Any, List, Optional
 
 from agents import (
     ConsentAgent, AltDataAgent, FraudAgent,
-    RiskPredictionAgent, XAIAgent, FairnessAgent, DecisionAgent
+    RiskPredictionAgent, XAIAgent, FairnessAgent,
+    DecisionAgent, ReviewAgent
 )
+from decision_log import log_decision, get_history
 
 ARTIFACTS = None
 consent_agent = ConsentAgent()
 alt_agent = AltDataAgent()
 decision_agent = DecisionAgent()
+review_agent = ReviewAgent()
+
 fraud_agent = None
 risk_agent = None
 xai_agent = None
@@ -31,14 +38,14 @@ async def lifespan(app: FastAPI):
         risk_agent = RiskPredictionAgent(ARTIFACTS["model"], ARTIFACTS["feature_names"])
         xai_agent = XAIAgent(ARTIFACTS["explainer"], ARTIFACTS["feature_names"])
         fairness_agent = FairnessAgent(ARTIFACTS["model"], ARTIFACTS["feature_names"])
-        print("✅ All 7 Autonomous Agents Initialized Successfully.")
+        print("✅ All Autonomous Agents Initialized Successfully.")
     else:
         raise FileNotFoundError("Run 'python train_model.py' first.")
     yield
 
 app = FastAPI(title="Enterprise Agentic Underwriting Pipeline", lifespan=lifespan)
 
-# Enable CORS for browser access from Flask frontend
+# Enable CORS for browser access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -94,6 +101,10 @@ def underwrite(applicant: FullApplicantSchema):
     raw_dict = applicant.model_dump()
     input_df = prepare_feature_df(raw_dict)
 
+    # Debug logs safely executed inside request flow
+    print("DEBUG feature_names:", ARTIFACTS["feature_names"])
+    print("DEBUG input_df row:\n", input_df.iloc[0].to_dict())
+
     # Agent 2: Alt Data Aggregation
     alt_res = alt_agent.process_signals(raw_dict)
 
@@ -114,6 +125,26 @@ def underwrite(applicant: FullApplicantSchema):
         decision_res["decision"], risk_res["credit_risk_score"], shap_drivers
     )
 
+    # Agent 8: Self-check against business policy BEFORE returning
+    review_res = review_agent.review(decision_res, risk_res, fraud_res, shap_drivers, letter)
+    if not review_res["self_check_passed"]:
+        # Fail safe: don't auto-approve something that failed policy review
+        if decision_res["decision"] == "APPROVED":
+            decision_res = {
+                "decision": "FLAGGED_FOR_MANUAL_REVIEW",
+                "reason": f"Self-check failed: {'; '.join(review_res['issues'])}"
+            }
+
+    # Audit Logging
+    log_decision({
+        "applicant_id": applicant.applicant_id,
+        "decision": decision_res["decision"],
+        "credit_risk_score": risk_res["credit_risk_score"],
+        "risk_tier": risk_res["risk_tier"],
+        "fraud_risk_level": fraud_res["fraud_risk_level"],
+        "self_check_passed": review_res["self_check_passed"],
+    })
+
     return {
         "applicant_id": applicant.applicant_id,
         "decision": decision_res["decision"],
@@ -124,7 +155,8 @@ def underwrite(applicant: FullApplicantSchema):
         "alt_data_metrics": alt_res,
         "fraud_assessment": fraud_res,
         "top_shap_drivers": shap_drivers[:4],
-        "explanation_letter": letter
+        "explanation_letter": letter,
+        "self_check": review_res,
     }
 
 @app.post("/api/v1/event-update", status_code=200)
@@ -159,6 +191,12 @@ def process_behavioral_event(event: BehavioralEventPayload):
 def audit_fairness():
     df = pd.read_csv("underwriting_dataset.csv")
     return fairness_agent.audit(df)
+
+@app.get("/api/v1/decision-history/{applicant_id}", status_code=200)
+def decision_history(applicant_id: str):
+    """Returns logged decisions for an applicant — use this to show score
+    drift over time in the live demo (call underwrite twice, then hit this)."""
+    return {"applicant_id": applicant_id, "history": get_history(applicant_id)}
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
