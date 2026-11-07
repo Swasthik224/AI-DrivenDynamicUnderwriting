@@ -1,6 +1,5 @@
 """
 decision_log.py
-----------------
 Minimal append-only decision log for demo purposes and DPDP-style
 accountability. Swap for a real DB in production.
 """

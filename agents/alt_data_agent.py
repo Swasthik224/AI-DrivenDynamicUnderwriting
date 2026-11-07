@@ -3,7 +3,7 @@ import pandas as pd
 
 
 class AltDataAgent:
-    """Aggregates and transforms unstructured digital footprint signals."""
+
 
     def process_signals(self, raw_data: dict) -> dict:
         # Compute composite alternative score (0 - 100)

@@ -96,7 +96,7 @@ def train_and_save():
         "anomaly_columns": ANOMALY_COLUMNS,
     }
     joblib.dump(artifacts, "underwriting_artifacts.pkl")
-    print("✅ Artifacts saved successfully to 'underwriting_artifacts.pkl'.")
+    print(" Artifacts saved successfully to 'underwriting_artifacts.pkl'.")
 
 
 if __name__ == "__main__":
