@@ -1,6 +1,6 @@
 # AI-Driven Dynamic Underwriting Using Alternative Data
 
-> A multi-agent underwriting prototype that scores credit risk from traditional financial data and consent-based alternative data, with explainable decisions, fraud detection, fairness auditing, what-if re-scoring and MCP tool access.
+> A multi-agent underwriting learning project that scores credit risk from traditional financial data and consent-based alternative data, with explainable decisions, fraud detection, fairness auditing, what-if re-scoring and MCP tool access.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.x-blue.svg"/>
@@ -41,7 +41,7 @@ This project combines traditional financial metrics with **consented alternative
 
 ## ⚠️ Current Status
 
-This is a hackathon and teaching prototype. It runs end to end, but:
+This is a personal learning project built to practise and improve skills in machine learning, API design and responsible AI. It runs end to end, but:
 
 * The model is trained on **synthetic data only**.
 * The supplied dataset contains **one default in 2,000 rows**, so the shipped model returns the same probability of default (0.00068) and credit-risk score (99.9) for every input. Decisions currently differ only because of the fraud rules and Isolation Forest. SHAP drivers and fairness results are therefore not meaningful until the dataset is regenerated with a realistic default rate (the latent risk formula in `generate_dataset.py` needs a positive offset).
@@ -355,12 +355,12 @@ Not yet implemented (needed before any real use): authentication, restricted COR
 
 ---
 
-## 👥 Contributors
+## 👤 Author
 
-Developed as part of an **AI Hackathon** focused on responsible, explainable and privacy-preserving AI underwriting.
+Built as a personal learning project to improve skills in responsible, explainable and privacy-preserving AI underwriting.
 
 ---
 
 ## 📄 License
 
-This project is intended for educational and hackathon purposes.
+This project is intended for learning and educational purposes only.
