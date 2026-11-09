@@ -1,46 +1,31 @@
-"""
-mcp_server.py
--------------
-MCP Server for Enterprise Agentic Underwriting Pipeline.
-
-Provides controlled tools for:
-- Applicant data
-- Alternative-data metrics
-- Fraud assessment
-- Risk prediction
-- Decision history
-- Fairness audit
-"""
-
 import os
-import joblib
-import pandas as pd
 
+import pandas as pd
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 
+import config
 from agents import (
     AltDataAgent,
     FraudAgent,
     RiskPredictionAgent,
     FairnessAgent,
 )
-
 from decision_log import get_history
+from security import (
+    constant_time_equal,
+    load_verified_artifacts,
+    strip_protected,
+    valid_applicant_id,
+)
 
-
-# ---------------------------------------------------------
-# MCP SERVER
-# ---------------------------------------------------------
+MCP_TOKEN = config.secret("UW_MCP_TOKEN")
+config.secret("UW_ARTIFACT_KEY")
 
 mcp = FastMCP("Agentic Underwriting MCP Server")
 
-
-# ---------------------------------------------------------
-# LOAD ARTIFACTS
-# ---------------------------------------------------------
-
-ARTIFACT_PATH = "underwriting_artifacts.pkl"
-DATASET_PATH = "underwriting_dataset.csv"
+ARTIFACT_PATH = config.ARTIFACT_PATH
+DATASET_PATH = config.DATASET_PATH
 
 ARTIFACTS = None
 fraud_agent = None
@@ -50,269 +35,115 @@ fairness_agent = None
 
 
 def load_artifacts():
-    global ARTIFACTS
-    global fraud_agent
-    global risk_agent
-    global fairness_agent
+    global ARTIFACTS, fraud_agent, risk_agent, fairness_agent
 
-    if not os.path.exists(ARTIFACT_PATH):
-        raise FileNotFoundError(
-            "underwriting_artifacts.pkl not found. "
-            "Run train_model.py first."
-        )
+    ARTIFACTS = load_verified_artifacts(ARTIFACT_PATH)
 
-    ARTIFACTS = joblib.load(ARTIFACT_PATH)
-
-    fraud_agent = FraudAgent(
-        ARTIFACTS["isolation_forest"],
-        ARTIFACTS["anomaly_columns"]
-    )
-
-    risk_agent = RiskPredictionAgent(
-        ARTIFACTS["model"],
-        ARTIFACTS["feature_names"]
-    )
-
-    fairness_agent = FairnessAgent(
-        ARTIFACTS["model"],
-        ARTIFACTS["feature_names"]
-    )
+    fraud_agent = FraudAgent(ARTIFACTS["isolation_forest"], ARTIFACTS["anomaly_columns"])
+    risk_agent = RiskPredictionAgent(ARTIFACTS["model"], ARTIFACTS["feature_names"])
+    fairness_agent = FairnessAgent(ARTIFACTS["model"], ARTIFACTS["feature_names"])
 
 
 load_artifacts()
 
 
-# ---------------------------------------------------------
-# HELPER
-# ---------------------------------------------------------
-
 def prepare_feature_df(data: dict) -> pd.DataFrame:
-
     clean_data = data.copy()
-
     for feature in ARTIFACTS["feature_names"]:
         if feature not in clean_data:
             clean_data[feature] = 0
-
-    return pd.DataFrame(
-        [clean_data]
-    )[ARTIFACTS["feature_names"]]
+    return pd.DataFrame([clean_data])[ARTIFACTS["feature_names"]]
 
 
 def load_applicant(applicant_id: str):
-
     if not os.path.exists(DATASET_PATH):
-        raise FileNotFoundError(
-            "underwriting_dataset.csv not found."
-        )
-
+        raise FileNotFoundError("underwriting_dataset.csv not found.")
     df = pd.read_csv(DATASET_PATH)
-
-    rows = df[
-        df["applicant_id"].astype(str) == str(applicant_id)
-    ]
-
+    rows = df[df["applicant_id"].astype(str) == str(applicant_id)]
     if rows.empty:
         return None
-
     return rows.iloc[0].to_dict()
 
 
-# =========================================================
-# MCP TOOL 1
-# =========================================================
+def fetch_consented_applicant(applicant_id: str):
+    if not valid_applicant_id(applicant_id):
+        return None, {"success": False, "message": "Invalid applicant identifier."}
+    applicant = load_applicant(applicant_id)
+    if applicant is None:
+        return None, {"success": False, "message": "Applicant not found"}
+    if not bool(applicant.get("consent_given", False)):
+        return None, {"success": False, "message": "Applicant consent is required."}
+    return applicant, None
+
 
 @mcp.tool()
 def get_applicant_data(applicant_id: str) -> dict:
-    """
-    Retrieve applicant underwriting data.
+    applicant, error = fetch_consented_applicant(applicant_id)
+    if error:
+        return error
 
-    Used by underwriting agents to obtain
-    permitted applicant signals.
-    """
-
-    applicant = load_applicant(applicant_id)
-
-    if applicant is None:
-        return {
-            "success": False,
-            "message": "Applicant not found"
-        }
-
-    # Convert numpy values into normal Python values
-    applicant = {
+    permitted = strip_protected(applicant)
+    permitted = {
         key: value.item() if hasattr(value, "item") else value
-        for key, value in applicant.items()
+        for key, value in permitted.items()
     }
+    return {"success": True, "applicant": permitted}
 
-    return {
-        "success": True,
-        "applicant": applicant
-    }
-
-
-# =========================================================
-# MCP TOOL 2
-# =========================================================
 
 @mcp.tool()
 def get_alternative_data(applicant_id: str) -> dict:
-    """
-    Retrieve and aggregate alternative financial
-    and behavioral signals for an applicant.
-    """
-
-    applicant = load_applicant(applicant_id)
-
-    if applicant is None:
-        return {
-            "success": False,
-            "message": "Applicant not found"
-        }
-
-    if not bool(applicant.get("consent_given", False)):
-        return {
-            "success": False,
-            "message": "Applicant consent is required."
-        }
+    applicant, error = fetch_consented_applicant(applicant_id)
+    if error:
+        return error
 
     result = alt_agent.process_signals(applicant)
+    return {"success": True, "applicant_id": applicant_id, "alternative_data": result}
 
-    return {
-        "success": True,
-        "applicant_id": applicant_id,
-        "alternative_data": result
-    }
-
-
-# =========================================================
-# MCP TOOL 3
-# =========================================================
 
 @mcp.tool()
 def run_risk_prediction(applicant_id: str) -> dict:
-    """
-    Run the XGBoost credit-risk model for an applicant.
-    """
-
-    applicant = load_applicant(applicant_id)
-
-    if applicant is None:
-        return {
-            "success": False,
-            "message": "Applicant not found"
-        }
-
-    if not bool(applicant.get("consent_given", False)):
-        return {
-            "success": False,
-            "message": "Applicant consent is required."
-        }
+    applicant, error = fetch_consented_applicant(applicant_id)
+    if error:
+        return error
 
     input_df = prepare_feature_df(applicant)
-
     result = risk_agent.predict_risk(input_df)
+    return {"success": True, "applicant_id": applicant_id, "risk_result": result}
 
-    return {
-        "success": True,
-        "applicant_id": applicant_id,
-        "risk_result": result
-    }
-
-
-# =========================================================
-# MCP TOOL 4
-# =========================================================
 
 @mcp.tool()
 def run_fraud_check(applicant_id: str) -> dict:
-    """
-    Run Isolation Forest and deterministic fraud
-    checks for an applicant.
-    """
-
-    applicant = load_applicant(applicant_id)
-
-    if applicant is None:
-        return {
-            "success": False,
-            "message": "Applicant not found"
-        }
-
-    if not bool(applicant.get("consent_given", False)):
-        return {
-            "success": False,
-            "message": "Applicant consent is required."
-        }
+    applicant, error = fetch_consented_applicant(applicant_id)
+    if error:
+        return error
 
     input_df = prepare_feature_df(applicant)
-
     result = fraud_agent.evaluate_fraud_risk(input_df)
+    return {"success": True, "applicant_id": applicant_id, "fraud_result": result}
 
-    return {
-        "success": True,
-        "applicant_id": applicant_id,
-        "fraud_result": result
-    }
-
-
-# =========================================================
-# MCP TOOL 5
-# =========================================================
 
 @mcp.tool()
 def get_decision_history(applicant_id: str) -> dict:
-    """
-    Retrieve previous underwriting decisions
-    for an applicant.
-    """
-
-    history = get_history(applicant_id)
-
+    if not valid_applicant_id(applicant_id):
+        return {"success": False, "message": "Invalid applicant identifier."}
     return {
         "success": True,
         "applicant_id": applicant_id,
-        "history": history
+        "history": get_history(applicant_id)
     }
 
-
-# =========================================================
-# MCP TOOL 6
-# =========================================================
 
 @mcp.tool()
 def run_fairness_audit() -> dict:
-    """
-    Run gender and age-group fairness analysis
-    using the current underwriting model.
-    """
-
     if not os.path.exists(DATASET_PATH):
-        return {
-            "success": False,
-            "message": "underwriting_dataset.csv not found."
-        }
-
+        return {"success": False, "message": "underwriting_dataset.csv not found."}
     df = pd.read_csv(DATASET_PATH)
-
     result = fairness_agent.audit(df)
+    return {"success": True, "fairness_audit": result}
 
-    return {
-        "success": True,
-        "fairness_audit": result
-    }
-
-
-# =========================================================
-# MCP RESOURCE
-# =========================================================
 
 @mcp.resource("underwriting://system")
 def underwriting_system_info() -> str:
-    """
-    Information about the underwriting system.
-    """
-
     return """
 Enterprise Agentic Underwriting Pipeline
 
@@ -336,17 +167,46 @@ data and services through standardized tools.
 """
 
 
-# =========================================================
-# START SERVER
-# =========================================================
+ALLOWED_HOSTS = {
+    f"{config.MCP_HOST}:{config.MCP_PORT}",
+    f"localhost:{config.MCP_PORT}",
+}
 
-import uvicorn
+
+class GuardMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+        host_ok = headers.get("host", "") in ALLOWED_HOSTS
+        auth = headers.get("authorization", "")
+        token_ok = auth.startswith("Bearer ") and constant_time_equal(auth[7:], MCP_TOKEN)
+
+        if host_ok and token_ok:
+            await self.app(scope, receive, send)
+            return
+
+        status = 403 if not host_ok else 401
+        body = b'{"detail":"Unauthorized"}'
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
 
 if __name__ == "__main__":
-    mcp_app = mcp.streamable_http_app()
-
     uvicorn.run(
-        mcp_app,
-        host="127.0.0.1",
-        port=8001
+        GuardMiddleware(mcp.streamable_http_app()),
+        host=config.MCP_HOST,
+        port=config.MCP_PORT,
     )

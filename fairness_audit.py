@@ -1,31 +1,22 @@
-"""
-fairness_audit.py
------------------
-Audits the underwriting model for algorithmic bias and disparate impact
-across demographic subgroups under the 80% rule standard.
-"""
-
-import joblib
 import pandas as pd
-import numpy as np
+
+import config
+from security import load_verified_artifacts
 
 
 def run_fairness_audit():
-    artifacts = joblib.load("underwriting_artifacts.pkl")
+    artifacts = load_verified_artifacts(config.ARTIFACT_PATH)
     model = artifacts["model"]
     feature_names = artifacts["feature_names"]
 
-    df = pd.read_csv("underwriting_dataset.csv")
+    df = pd.read_csv(config.DATASET_PATH)
     df_consented = df[df["consent_given"] == True].copy()
 
-    # Model Predictions (1 = Default/Reject, 0 = Non-Default/Approve)
     probs = model.predict_proba(df_consented[feature_names])[:, 1]
-    # Approval decision: prob of default < 0.45
     df_consented["approved"] = (probs < 0.45).astype(int)
 
     results = {}
 
-    # Audit Function
     def calculate_dir(dataframe, attribute, privileged_group):
         group_rates = dataframe.groupby(attribute)["approved"].mean()
         priv_rate = group_rates[privileged_group]

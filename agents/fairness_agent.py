@@ -1,10 +1,7 @@
-"""agents/fairness_agent.py"""
 import pandas as pd
 
 
 class FairnessAgent:
-    """Computes disparate-impact metrics using the ACTUAL decision policy
-    (score >= 60 => auto-approved), not a raw probability cutoff."""
 
     def __init__(self, model, feature_names: list, threshold: float = 0.80, approval_score: float = 60.0):
         self.model = model

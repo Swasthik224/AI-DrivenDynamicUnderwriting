@@ -1,10 +1,3 @@
-"""
-generate_dataset.py
--------------------
-Generates synthetic data using the SAME feature set the API/dashboard actually
-send, so the trained model responds to every signal exposed in the UI.
-"""
-
 import numpy as np
 import pandas as pd
 

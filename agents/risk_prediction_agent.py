@@ -1,9 +1,7 @@
-"""agents/risk_prediction_agent.py"""
 import pandas as pd
 
 
 class RiskPredictionAgent:
-    """XGBoost-backed PD (Probability of Default) and Credit Risk Score engine."""
 
     def __init__(self, model, feature_names: list):
         self.model = model
