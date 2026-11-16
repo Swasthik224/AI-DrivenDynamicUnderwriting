@@ -54,6 +54,69 @@ This project implements a local-first **Enterprise Agentic Underwriting Workstat
 4. **Tab 4 — Audit & Fairness:** Run 80% rule fairness audits, trigger model retraining with HMAC re-signing, and inspect the immutable decision and override audit trail.
 
 ---
+## 🏗️ System Architecture
+
+```mermaid
+flowchart TD
+    subgraph UI["Flask Workstation UI (:5000)"]
+        T1[Underwrite / Lookup]
+        T2[Manual Review Queue]
+        T3[Batch]
+        T4[Audit / Bias]
+    end
+
+    subgraph API["FastAPI Orchestrator (app.py :8000)"]
+        A1[JWT RBAC Middleware<br/>LOAN_OFFICER · SENIOR_UNDERWRITER · RISK_ADMIN]
+        A2[Pydantic Validation and Home Credit Feature Alignment<br/>365243 sentinel → NaN]
+        A3[Human-in-the-Loop Review Queue and Override Handler]
+    end
+
+    subgraph MCP["FastMCP Server (:8001/mcp)"]
+        M1[get_applicant_data]
+        M2[get_alternative_data]
+        M3[run_risk_prediction]
+        M4[run_fraud_check]
+        M5[get_decision_history]
+        M6[run_fairness_audit]
+    end
+
+    subgraph AGENTS["8 Autonomous Agents"]
+        G1[ConsentAgent<br/>DPDP gate]
+        G2[AltDataAgent<br/>fallback summary]
+        G3[FraudAgent<br/>Isolation Forest]
+        G4[RiskPredictionAgent<br/>XGBoost]
+        G5[DecisionAgent<br/>policy engine]
+        G6[XAIAgent<br/>SHAP + templates]
+        G7[ReviewAgent<br/>policy self-check]
+        G8[FairnessAgent<br/>80% rule audit]
+    end
+
+    subgraph DATA["Data and Verified Artifacts"]
+        D1[application_train.csv / test.csv]
+        D2[underwriting_artifacts.pkl + .sig<br/>HMAC-SHA256 verified at startup]
+    end
+
+    subgraph AUDIT["Tamper-Evident Audit and Logging"]
+        L1[decision_log.py<br/>hash-chained records]
+    end
+
+    UI -- "JSON / Multipart + Bearer JWT (HS256)" --> API
+    API -- "Streamable HTTP + Bearer Token" --> MCP
+    API -- "In-process calls" --> AGENTS
+    MCP --> DATA
+    AGENTS --> AUDIT
+```
+
+### Layer Summary
+
+| Layer | Component | Responsibility |
+|-------|-----------|----------------|
+| Presentation | Flask Workstation UI (`:5000`) | Four-tab interface: underwriting, review queue, batch, audit/bias |
+| Orchestration | FastAPI (`app.py`, `:8000`) | JWT RBAC, input validation, review queue, overrides |
+| Tooling | FastMCP (`:8001/mcp`) | Authenticated tool access to applicant data, risk, fraud, history and fairness |
+| Intelligence | 8 agents | Consent, alternative data, fraud, risk, decision, explainability, review, fairness |
+| Data | CSVs + signed model artifacts | Home Credit datasets; HMAC-SHA256 verified on startup |
+| Compliance | `decision_log.py` | Hash-chained, tamper-evident decision log |
 
 ## 🏗️ System Architecture
 
