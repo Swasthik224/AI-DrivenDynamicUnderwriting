@@ -52,6 +52,8 @@ This project implements a local-first **Enterprise Agentic Underwriting Workstat
 2. **Tab 2 — Manual Review Queue:** Live counter of `FLAGGED_FOR_MANUAL_REVIEW` and `CONDITIONAL_APPROVAL` applications where Senior Underwriters issue final overrides with audit notes.
 3. **Tab 3 — Batch Scoring:** Upload a Home Credit CSV (up to 500 rows / 10 MB) for vectorized XGBoost + Isolation Forest portfolio scoring.
 4. **Tab 4 — Audit & Fairness:** Run 80% rule fairness audits, trigger model retraining with HMAC re-signing, and inspect the immutable decision and override audit trail.
+
+----
 ## 🏗️ System Architecture
 
 ```mermaid
@@ -124,131 +126,7 @@ flowchart TD
 
     linkStyle 0,1,2,3,4 stroke:#000000,stroke-width:2px,color:#000000
 ```
----
-## 🏗️ System Architecture
 
-```mermaid
-flowchart TD
-    subgraph UI["Flask Workstation UI (:5000)"]
-        T1[Underwrite / Lookup]
-        T2[Manual Review Queue]
-        T3[Batch]
-        T4[Audit / Bias]
-    end
-
-    subgraph API["FastAPI Orchestrator (app.py :8000)"]
-        A1[JWT RBAC Middleware<br/>LOAN_OFFICER · SENIOR_UNDERWRITER · RISK_ADMIN]
-        A2[Pydantic Validation and Home Credit Feature Alignment<br/>365243 sentinel → NaN]
-        A3[Human-in-the-Loop Review Queue and Override Handler]
-    end
-
-    subgraph MCP["FastMCP Server (:8001/mcp)"]
-        M1[get_applicant_data]
-        M2[get_alternative_data]
-        M3[run_risk_prediction]
-        M4[run_fraud_check]
-        M5[get_decision_history]
-        M6[run_fairness_audit]
-    end
-
-    subgraph AGENTS["8 Autonomous Agents"]
-        G1[ConsentAgent<br/>DPDP gate]
-        G2[AltDataAgent<br/>fallback summary]
-        G3[FraudAgent<br/>Isolation Forest]
-        G4[RiskPredictionAgent<br/>XGBoost]
-        G5[DecisionAgent<br/>policy engine]
-        G6[XAIAgent<br/>SHAP + templates]
-        G7[ReviewAgent<br/>policy self-check]
-        G8[FairnessAgent<br/>80% rule audit]
-    end
-
-    subgraph DATA["Data and Verified Artifacts"]
-        D1[application_train.csv / test.csv]
-        D2[underwriting_artifacts.pkl + .sig<br/>HMAC-SHA256 verified at startup]
-    end
-
-    subgraph AUDIT["Tamper-Evident Audit and Logging"]
-        L1[decision_log.py<br/>hash-chained records]
-    end
-
-    UI -- "JSON / Multipart + Bearer JWT (HS256)" --> API
-    API -- "Streamable HTTP + Bearer Token" --> MCP
-    API -- "In-process calls" --> AGENTS
-    MCP --> DATA
-    AGENTS --> AUDIT
-
-    classDef plain fill:#FFFFFF,stroke:#000000,color:#000000,stroke-width:1px;
-    classDef accent fill:#D50000,stroke:#000000,color:#FFFFFF,stroke-width:1px;
-
-    class T1,T2,T3,T4 plain;
-    class A1,A2,A3 accent;
-    class M1,M2,M3,M4,M5,M6 plain;
-    class G1,G2,G3,G4,G5,G6,G7,G8 plain;
-    class D1,D2 plain;
-    class L1 accent;
-
-    style UI fill:#FFFFFF,stroke:#000000,color:#000000
-    style API fill:#FFFFFF,stroke:#D50000,color:#D50000,stroke-width:2px
-    style MCP fill:#FFFFFF,stroke:#000000,color:#000000
-    style AGENTS fill:#FFFFFF,stroke:#000000,color:#000000
-    style DATA fill:#FFFFFF,stroke:#000000,color:#000000
-    style AUDIT fill:#FFFFFF,stroke:#D50000,color:#D50000,stroke-width:2px
-
-    linkStyle 0,1,2,3,4 stroke:#D50000,stroke-width:2px,color:#000000
-```
----
-## 🏗️ System Architecture
-
-```mermaid
-flowchart TD
-    subgraph UI["Flask Workstation UI (:5000)"]
-        T1[Underwrite / Lookup]
-        T2[Manual Review Queue]
-        T3[Batch]
-        T4[Audit / Bias]
-    end
-
-    subgraph API["FastAPI Orchestrator (app.py :8000)"]
-        A1[JWT RBAC Middleware<br/>LOAN_OFFICER · SENIOR_UNDERWRITER · RISK_ADMIN]
-        A2[Pydantic Validation and Home Credit Feature Alignment<br/>365243 sentinel → NaN]
-        A3[Human-in-the-Loop Review Queue and Override Handler]
-    end
-
-    subgraph MCP["FastMCP Server (:8001/mcp)"]
-        M1[get_applicant_data]
-        M2[get_alternative_data]
-        M3[run_risk_prediction]
-        M4[run_fraud_check]
-        M5[get_decision_history]
-        M6[run_fairness_audit]
-    end
-
-    subgraph AGENTS["8 Autonomous Agents"]
-        G1[ConsentAgent<br/>DPDP gate]
-        G2[AltDataAgent<br/>fallback summary]
-        G3[FraudAgent<br/>Isolation Forest]
-        G4[RiskPredictionAgent<br/>XGBoost]
-        G5[DecisionAgent<br/>policy engine]
-        G6[XAIAgent<br/>SHAP + templates]
-        G7[ReviewAgent<br/>policy self-check]
-        G8[FairnessAgent<br/>80% rule audit]
-    end
-
-    subgraph DATA["Data and Verified Artifacts"]
-        D1[application_train.csv / test.csv]
-        D2[underwriting_artifacts.pkl + .sig<br/>HMAC-SHA256 verified at startup]
-    end
-
-    subgraph AUDIT["Tamper-Evident Audit and Logging"]
-        L1[decision_log.py<br/>hash-chained records]
-    end
-
-    UI -- "JSON / Multipart + Bearer JWT (HS256)" --> API
-    API -- "Streamable HTTP + Bearer Token" --> MCP
-    API -- "In-process calls" --> AGENTS
-    MCP --> DATA
-    AGENTS --> AUDIT
-```
 
 ### Layer Summary
 
@@ -261,44 +139,7 @@ flowchart TD
 | Data | CSVs + signed model artifacts | Home Credit datasets; HMAC-SHA256 verified on startup |
 | Compliance | `decision_log.py` | Hash-chained, tamper-evident decision log |
 
-## 🏗️ System Architecture
 
-```text
-+-----------------------------------------------------------------------------------+
-|                        4-TAB FLASK WORKSTATION UI (:5000)                         |
-|  [1. Underwrite / Lookup]  [2. Manual Review Queue]  [3. Batch]  [4. Audit/Bias]  |
-+-----------------------------------------+-----------------------------------------+
-                                          | JSON / Multipart + Bearer JWT (HS256)
-                                          v
-+-----------------------------------------------------------------------------------+
-|                        FASTAPI ORCHESTRATOR (app.py :8000)                        |
-|  • JWT RBAC Middleware (LOAN_OFFICER | SENIOR_UNDERWRITER | RISK_ADMIN)           |
-|  • Pydantic Validation & Home Credit Feature Alignment (365243 Sentinel -> NaN)   |
-|  • Human-in-the-Loop Manual Review Queue & Override Handler                       |
-+-------------------+-------------------------------------------+-------------------+
-                    | Streamable HTTP + Bearer Token            | In-Process Calls
-                    v                                           v
-+---------------------------------------+   +---------------------------------------+
-|      FASTMCP SERVER (:8001/mcp)       |   |       8 AUTONOMOUS AGENTS LAYER       |
-|  • get_applicant_data(SK_ID_CURR)     |   |  1. ConsentAgent (DPDP Gate)          |
-|  • get_alternative_data               |   |  2. AltDataAgent (Fallback Summary)   |
-|  • run_risk_prediction                |   |  3. FraudAgent (Isolation Forest)     |
-|  • run_fraud_check                    |   |  4. RiskPredictionAgent (XGBoost)     |
-|  • get_decision_history               |   |  5. DecisionAgent (Policy Engine)     |
-|  • run_fairness_audit                 |   |  6. XAIAgent (SHAP + Templates)       |
-+-------------------+-------------------+   |  7. ReviewAgent (Policy Self-Check)   |
-                    |                       |  8. FairnessAgent (80% Rule Audit)    |
-                    v                       +-------------------+-------------------+
-+---------------------------------------+                       |
-|      DATA & VERIFIED ARTIFACTS        |                       v
-|  • application_train.csv / test.csv   |   +---------------------------------------+
-|  • underwriting_artifacts.pkl (.sig)  |   |   TAMPER-EVIDENT AUDIT & LOGGING      |
-|    (HMAC-SHA256 Verified at Startup)  |   |  • decision_log.py (Hash-Chained)     |
-+---------------------------------------+   +---------------------------------------+
-
-```
-
----
 
 ## Decision Policy Precedence
 
