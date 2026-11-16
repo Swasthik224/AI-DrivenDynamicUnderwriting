@@ -1,2 +1,14 @@
-__pycache__/ 
-*.pyc 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local secrets & environment variables
+.env
+
+# Large Kaggle dataset folder
+home-credit-default-risk/
+
+# Runtime locks & legacy backups
+*.lock
+*.bak

@@ -9,8 +9,11 @@ from config import OLLAMA_URL
 from security import safe_text
 
 ALLOWED_DECISIONS = {
-    "APPROVED", "CONDITIONAL_APPROVAL", "DECLINED",
-    "FLAGGED_FOR_MANUAL_REVIEW", "REJECTED_NON_COMPLIANT"
+    "APPROVED",
+    "CONDITIONAL_APPROVAL",
+    "DECLINED",
+    "FLAGGED_FOR_MANUAL_REVIEW",
+    "REJECTED_NON_COMPLIANT",
 }
 MAX_LETTER_CHARS = 2000
 
@@ -58,12 +61,18 @@ class XAIAgent:
         feature_importance.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
         return feature_importance
 
-    def generate_explanation_letter(self, decision: str, score: float, top_features: List[Dict[str, Any]]) -> str:
+    def generate_explanation_letter(
+        self,
+        decision: str,
+        score: float,
+        top_features: List[Dict[str, Any]],
+    ) -> str:
         decision = decision if decision in ALLOWED_DECISIONS else "UNKNOWN"
         score = float(score)
         top = top_features[:3]
         feature_summary = ", ".join(
-            f"{_clean_name(f['feature'])} (impact: {float(f['shap_value']):+.3f})" for f in top
+            f"{_clean_name(f['feature'])} (impact: {float(f['shap_value']):+.3f})"
+            for f in top
         )
         lead_feature = _clean_name(top_features[0]["feature"]) if top_features else "n/a"
 
@@ -97,9 +106,29 @@ class XAIAgent:
                 f"with a Risk Score of {score}/100. Key supporting drivers include '{lead_feature}'. "
                 f"Processed under Indian DPDP Act guidelines."
             )
-        else:
+
+        if decision == "CONDITIONAL_APPROVAL":
             return (
-                f"Dear Applicant, Thank you for your application. Your request has been DECLINED "
-                f"(Score: {score}/100). Primary factors: '{lead_feature}'. "
-                f"You have the right to request human re-evaluation within 30 days under DPDP rules."
+                f"Dear Applicant, Your credit application has received CONDITIONAL APPROVAL "
+                f"(Risk Score: {score}/100), subject to standard income and document verification. "
+                f"Primary contributing factor: '{lead_feature}'. Processed under Indian DPDP Act guidelines."
             )
+
+        if decision == "FLAGGED_FOR_MANUAL_REVIEW":
+            return (
+                f"Dear Applicant, Your credit application (Risk Score: {score}/100) has been routed for "
+                f"MANUAL REVIEW by a senior credit officer for additional policy verification. "
+                f"Primary contributing factor: '{lead_feature}'. Processed under Indian DPDP Act guidelines."
+            )
+
+        if decision == "REJECTED_NON_COMPLIANT":
+            return (
+                "Dear Applicant, Your credit application could not be processed because explicit data "
+                "processing consent was not verified under Indian DPDP Act 2023 guidelines."
+            )
+
+        return (
+            f"Dear Applicant, Thank you for your application. Your request has been DECLINED "
+            f"(Score: {score}/100). Primary factors: '{lead_feature}'. "
+            f"You have the right to request human re-evaluation within 30 days under DPDP rules."
+        )

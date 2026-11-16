@@ -4,6 +4,7 @@ import os
 import json
 import hashlib
 import threading
+import shutil
 
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -11,14 +12,17 @@ from contextlib import contextmanager
 LOG_PATH = os.getenv("DECISION_LOG_PATH", "decision_log.csv")
 LOCK_PATH = LOG_PATH + ".lock"
 
-FIELDS = [
+LEGACY_FIELDS = [
     "timestamp",
     "applicant_id",
     "decision",
     "credit_risk_score",
     "risk_tier",
     "fraud_risk_level",
-    "self_check_passed",
+    "self_check_passed"
+]
+
+FIELDS = LEGACY_FIELDS + [
     "previous_hash",
     "record_hash"
 ]
@@ -30,16 +34,10 @@ _thread_lock = threading.RLock()
 
 @contextmanager
 def file_lock():
-    """
-    Cross-platform file lock.
-    Uses fcntl on Linux/macOS and msvcrt on Windows.
-    """
-
     os.makedirs(os.path.dirname(os.path.abspath(LOCK_PATH)), exist_ok=True)
 
     with _thread_lock:
         with open(LOCK_PATH, "a+b") as lock_file:
-
             if os.name == "nt":
                 import msvcrt
 
@@ -57,7 +55,6 @@ def file_lock():
                 finally:
                     lock_file.seek(0)
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-
             else:
                 import fcntl
 
@@ -69,32 +66,29 @@ def file_lock():
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def calculate_hash(record: dict) -> str:
-    """
-    Generate a SHA-256 hash from a decision record.
-    """
-
-    payload = {
-        key: record.get(key)
+def normalize_record(record: dict) -> dict:
+    return {
+        key: "" if record.get(key) is None else str(record.get(key))
         for key in FIELDS
         if key != "record_hash"
     }
 
+
+def calculate_hash(record: dict) -> str:
+    payload = normalize_record(record)
+
     serialized = json.dumps(
         payload,
         sort_keys=True,
-        separators=(",", ":"),
-        default=str
+        separators=(",", ":")
     )
 
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        serialized.encode("utf-8")
+    ).hexdigest()
 
 
 def validate_record(record: dict):
-    """
-    Validate the minimum information required for logging.
-    """
-
     if not isinstance(record, dict):
         raise ValueError("Decision record must be a dictionary.")
 
@@ -121,7 +115,7 @@ def validate_record(record: dict):
 
     score = record.get("credit_risk_score")
 
-    if score is not None:
+    if score is not None and score != "":
         try:
             score = float(score)
         except (TypeError, ValueError):
@@ -131,16 +125,164 @@ def validate_record(record: dict):
             raise ValueError("Credit risk score must be between 0 and 100.")
 
 
-def get_last_hash():
-    """
-    Retrieve the hash of the latest validly formatted log entry.
-    """
+def _verify_log_unlocked() -> dict:
+    if not os.path.exists(LOG_PATH):
+        return {
+            "valid": True,
+            "total_records": 0,
+            "message": "Decision log does not exist yet."
+        }
 
+    previous_hash = GENESIS_HASH
+    total_records = 0
+
+    with open(LOG_PATH, "r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+
+        if reader.fieldnames != FIELDS:
+            return {
+                "valid": False,
+                "total_records": 0,
+                "message": "Invalid or modified log header."
+            }
+
+        for row in reader:
+            total_records += 1
+
+            if None in row or any(row.get(field) is None for field in FIELDS):
+                return {
+                    "valid": False,
+                    "total_records": total_records,
+                    "message": f"Malformed record at record {total_records}."
+                }
+
+            stored_previous_hash = row.get("previous_hash")
+            stored_record_hash = row.get("record_hash")
+
+            if stored_previous_hash != previous_hash:
+                return {
+                    "valid": False,
+                    "total_records": total_records,
+                    "message": f"Hash chain mismatch at record {total_records}."
+                }
+
+            calculated_hash = calculate_hash(row)
+
+            if stored_record_hash != calculated_hash:
+                return {
+                    "valid": False,
+                    "total_records": total_records,
+                    "message": f"Record integrity check failed at record {total_records}."
+                }
+
+            previous_hash = stored_record_hash
+
+    return {
+        "valid": True,
+        "total_records": total_records,
+        "message": "All decision records passed integrity verification."
+    }
+
+
+def migrate_legacy_log() -> dict:
+    with file_lock():
+        if not os.path.exists(LOG_PATH) or os.path.getsize(LOG_PATH) == 0:
+            return {
+                "success": True,
+                "migrated": False,
+                "message": "No existing decision records to migrate."
+            }
+
+        with open(LOG_PATH, "r", newline="", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+
+            if reader.fieldnames == FIELDS:
+                return {
+                    "success": True,
+                    "migrated": False,
+                    "message": "Decision log already uses the current format."
+                }
+
+            if reader.fieldnames != LEGACY_FIELDS:
+                raise RuntimeError(
+                    "Unsupported decision log format. "
+                    "Original file has not been modified."
+                )
+
+            legacy_records = list(reader)
+
+        migrated_records = []
+        previous_hash = GENESIS_HASH
+
+        for index, old_record in enumerate(legacy_records, start=1):
+            if None in old_record or any(
+                old_record.get(field) is None
+                for field in LEGACY_FIELDS
+            ):
+                raise RuntimeError(
+                    f"Malformed legacy decision record at row {index}."
+                )
+
+            new_record = {
+                field: old_record[field]
+                for field in LEGACY_FIELDS
+            }
+
+            new_record["previous_hash"] = previous_hash
+            new_record["record_hash"] = calculate_hash(new_record)
+
+            migrated_records.append(new_record)
+            previous_hash = new_record["record_hash"]
+
+        backup_path = LOG_PATH + ".legacy.bak"
+
+        if os.path.exists(backup_path):
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+            backup_path = LOG_PATH + f".legacy.{timestamp}.bak"
+
+        shutil.copy2(LOG_PATH, backup_path)
+
+        temp_path = LOG_PATH + ".tmp"
+
+        try:
+            with open(temp_path, "w", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=FIELDS
+                )
+
+                writer.writeheader()
+                writer.writerows(migrated_records)
+
+                file.flush()
+                os.fsync(file.fileno())
+
+            os.replace(temp_path, LOG_PATH)
+
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+        return {
+            "success": True,
+            "migrated": True,
+            "total_records": len(migrated_records),
+            "backup_path": backup_path,
+            "message": "Legacy decision log migrated successfully."
+        }
+
+
+def get_last_hash():
     if not os.path.exists(LOG_PATH):
         return GENESIS_HASH
 
     with open(LOG_PATH, "r", newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
+
+        if reader.fieldnames != FIELDS:
+            raise RuntimeError("Invalid decision log format.")
+
         last_record = None
 
         for row in reader:
@@ -153,31 +295,16 @@ def get_last_hash():
 
 
 def log_decision(record: dict):
-    """
-    Append a decision to the hash-chained audit log.
-    """
-
     validate_record(record)
+    migrate_legacy_log()
 
     with file_lock():
+        integrity = _verify_log_unlocked()
 
-        file_exists = os.path.exists(LOG_PATH)
-
-        if file_exists and os.path.getsize(LOG_PATH) > 0:
-            with open(LOG_PATH, "r", newline="", encoding="utf-8") as file:
-                reader = csv.reader(file)
-                existing_header = next(reader, [])
-
-            if existing_header != FIELDS:
-                raise RuntimeError(
-                    "Existing decision log has an incompatible format. "
-                    "Back it up and migrate it before using this version."
-                )
+        if not integrity["valid"]:
+            raise RuntimeError(integrity["message"])
 
         previous_hash = get_last_hash()
-
-        if not previous_hash:
-            raise RuntimeError("Could not retrieve the previous record hash.")
 
         new_record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -190,7 +317,14 @@ def log_decision(record: dict):
             "previous_hash": previous_hash
         }
 
+        new_record = {
+            key: "" if value is None else str(value)
+            for key, value in new_record.items()
+        }
+
         new_record["record_hash"] = calculate_hash(new_record)
+
+        file_exists = os.path.exists(LOG_PATH)
 
         with open(LOG_PATH, "a", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(
@@ -207,14 +341,16 @@ def log_decision(record: dict):
 
 
 def get_history(applicant_id: str) -> list:
-    """
-    Return decision history for a specific applicant.
-    """
-
     if not isinstance(applicant_id, str) or not applicant_id.strip():
         raise ValueError("A valid applicant ID is required.")
 
+    migrate_legacy_log()
+
     with file_lock():
+        integrity = _verify_log_unlocked()
+
+        if not integrity["valid"]:
+            raise RuntimeError(integrity["message"])
 
         if not os.path.exists(LOG_PATH):
             return []
@@ -222,91 +358,33 @@ def get_history(applicant_id: str) -> list:
         with open(LOG_PATH, "r", newline="", encoding="utf-8") as file:
             reader = csv.DictReader(file)
 
-            if reader.fieldnames != FIELDS:
-                raise RuntimeError("Invalid decision log format.")
-
-            rows = [
+            return [
                 row
                 for row in reader
                 if row["applicant_id"] == applicant_id.strip()
             ]
 
-        return rows
-
 
 def verify_log() -> dict:
-    """
-    Verify the integrity of the complete decision log.
-
-    Checks:
-    - Record hash validity.
-    - Previous hash linkage.
-    - Record ordering.
-    """
-
     with file_lock():
-
-        if not os.path.exists(LOG_PATH):
-            return {
-                "valid": True,
-                "total_records": 0,
-                "message": "Decision log does not exist yet."
-            }
-
-        previous_hash = GENESIS_HASH
-        total_records = 0
-
-        with open(LOG_PATH, "r", newline="", encoding="utf-8") as file:
-            reader = csv.DictReader(file)
-
-            if reader.fieldnames != FIELDS:
-                return {
-                    "valid": False,
-                    "total_records": 0,
-                    "message": "Invalid or modified log header."
-                }
-
-            for row in reader:
-                total_records += 1
-
-                stored_previous_hash = row.get("previous_hash")
-                stored_record_hash = row.get("record_hash")
-
-                if stored_previous_hash != previous_hash:
-                    return {
-                        "valid": False,
-                        "total_records": total_records,
-                        "message": (
-                            f"Hash chain mismatch at record "
-                            f"{total_records}."
-                        )
-                    }
-
-                calculated_hash = calculate_hash(row)
-
-                if stored_record_hash != calculated_hash:
-                    return {
-                        "valid": False,
-                        "total_records": total_records,
-                        "message": (
-                            f"Record integrity check failed at record "
-                            f"{total_records}."
-                        )
-                    }
-
-                previous_hash = stored_record_hash
-
-        return {
-            "valid": True,
-            "total_records": total_records,
-            "message": "All decision records passed integrity verification."
-        }
+        return _verify_log_unlocked()
 
 
 if __name__ == "__main__":
+    migration = migrate_legacy_log()
+
+    print("Decision Log Migration")
+    print("----------------------")
+    print(f"Success: {migration['success']}")
+    print(f"Migrated: {migration['migrated']}")
+    print(migration["message"])
+
+    if migration.get("backup_path"):
+        print(f"Backup: {migration['backup_path']}")
 
     result = verify_log()
 
+    print()
     print("Decision Log Verification")
     print("-------------------------")
     print(f"Valid: {result['valid']}")
