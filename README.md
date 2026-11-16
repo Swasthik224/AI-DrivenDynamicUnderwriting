@@ -52,7 +52,78 @@ This project implements a local-first **Enterprise Agentic Underwriting Workstat
 2. **Tab 2 — Manual Review Queue:** Live counter of `FLAGGED_FOR_MANUAL_REVIEW` and `CONDITIONAL_APPROVAL` applications where Senior Underwriters issue final overrides with audit notes.
 3. **Tab 3 — Batch Scoring:** Upload a Home Credit CSV (up to 500 rows / 10 MB) for vectorized XGBoost + Isolation Forest portfolio scoring.
 4. **Tab 4 — Audit & Fairness:** Run 80% rule fairness audits, trigger model retraining with HMAC re-signing, and inspect the immutable decision and override audit trail.
+## 🏗️ System Architecture
 
+```mermaid
+flowchart TD
+    subgraph UI["Flask Workstation UI (:5000)"]
+        T1[Underwrite / Lookup]
+        T2[Manual Review Queue]
+        T3[Batch]
+        T4[Audit / Bias]
+    end
+
+    subgraph API["FastAPI Orchestrator (app.py :8000)"]
+        A1[JWT RBAC Middleware<br/>LOAN_OFFICER · SENIOR_UNDERWRITER · RISK_ADMIN]
+        A2[Pydantic Validation and Home Credit Feature Alignment<br/>365243 sentinel → NaN]
+        A3[Human-in-the-Loop Review Queue and Override Handler]
+    end
+
+    subgraph MCP["FastMCP Server (:8001/mcp)"]
+        M1[get_applicant_data]
+        M2[get_alternative_data]
+        M3[run_risk_prediction]
+        M4[run_fraud_check]
+        M5[get_decision_history]
+        M6[run_fairness_audit]
+    end
+
+    subgraph AGENTS["8 Autonomous Agents"]
+        G1[ConsentAgent<br/>DPDP gate]
+        G2[AltDataAgent<br/>fallback summary]
+        G3[FraudAgent<br/>Isolation Forest]
+        G4[RiskPredictionAgent<br/>XGBoost]
+        G5[DecisionAgent<br/>policy engine]
+        G6[XAIAgent<br/>SHAP + templates]
+        G7[ReviewAgent<br/>policy self-check]
+        G8[FairnessAgent<br/>80% rule audit]
+    end
+
+    subgraph DATA["Data and Verified Artifacts"]
+        D1[application_train.csv / test.csv]
+        D2[underwriting_artifacts.pkl + .sig<br/>HMAC-SHA256 verified at startup]
+    end
+
+    subgraph AUDIT["Tamper-Evident Audit and Logging"]
+        L1[decision_log.py<br/>hash-chained records]
+    end
+
+    UI -- "JSON / Multipart + Bearer JWT (HS256)" --> API
+    API -- "Streamable HTTP + Bearer Token" --> MCP
+    API -- "In-process calls" --> AGENTS
+    MCP --> DATA
+    AGENTS --> AUDIT
+
+    classDef plain fill:#FFFFFF,stroke:#000000,color:#000000,stroke-width:1px;
+    classDef red fill:#D50000,stroke:#000000,color:#FFFFFF,stroke-width:1px;
+    classDef blue fill:#0D47A1,stroke:#000000,color:#FFFFFF,stroke-width:1px;
+
+    class T1,T2,T3,T4 plain;
+    class A1,A2,A3 red;
+    class M1,M2,M3,M4,M5,M6 blue;
+    class G1,G2,G3,G4,G5,G6,G7,G8 blue;
+    class D1,D2 plain;
+    class L1 red;
+
+    style UI fill:#FFFFFF,stroke:#000000,color:#000000
+    style API fill:#FFFFFF,stroke:#D50000,color:#D50000,stroke-width:2px
+    style MCP fill:#FFFFFF,stroke:#0D47A1,color:#0D47A1,stroke-width:2px
+    style AGENTS fill:#FFFFFF,stroke:#0D47A1,color:#0D47A1,stroke-width:2px
+    style DATA fill:#FFFFFF,stroke:#000000,color:#000000
+    style AUDIT fill:#FFFFFF,stroke:#D50000,color:#D50000,stroke-width:2px
+
+    linkStyle 0,1,2,3,4 stroke:#000000,stroke-width:2px,color:#000000
+```
 ---
 ## 🏗️ System Architecture
 
